@@ -301,14 +301,14 @@ def rang_role(role):
         if r.startswith(k) or (k == 'directeur' and r.startswith('directrice')) or (k == 'co-directeur' and r.startswith('co-directrice')): return i
     return len(ORDRE_ROLES)
 def role_ar(role, i=0, sexe=''):
-    """Qualité du membre en arabe, accordée au genre (sexe 'F', ou rôle saisi au féminin)."""
+    """Qualité du membre en arabe : toujours au masculin (رئيسا / مشرفا / عضوا), quel que soit le genre.
+    Seul le grade (grade_ar) est accordé au féminin."""
     r = sans_accents(role).lower()
-    f = sexe == 'F' or 'presidente' in r or 'trice' in r
     if not r: r = 'president' if i == 1 else 'directeur' if i == 2 else 'membre'
-    if 'president' in r: return 'رئيسة' if f else 'رئيسا'
-    if r.startswith('co-direct'): return 'مشرفة مشاركة' if f else 'مشرفا مشاركا'
-    if r.startswith('direct'): return 'مشرفة' if f else 'مشرفا'
-    return 'عضوة' if f else 'عضوا'
+    if 'president' in r: return 'رئيسا'
+    if r.startswith('co-direct'): return 'مشرفا مشاركا'
+    if r.startswith('direct'): return 'مشرفا'
+    return 'عضوا'
 
 
 def depuis_formulaire(d):
