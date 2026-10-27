@@ -5,6 +5,7 @@ from docfill import fill
 from Codebarre import inserer_codes_barres, repere
 from mise_en_page import aligner, accorder
 import traduction_ar as TR
+import genre
 
 app = Flask(__name__)
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -17,6 +18,8 @@ os.makedirs(UP, exist_ok=True)
 BLANC = '………'
 MOIS_AR = ['يناير','فبراير','مارس','أبريل','ماي','يونيو','يوليوز','غشت','شتنبر','اكتوبر','نونبر','دجنبر']
 GRADE_AR = {'PES': 'أستاذ التعليم العالي', 'PH': 'أستاذ مؤهل', 'MCH': 'أستاذ محاضر مؤهل', 'MC': 'أستاذ محاضر', 'P': 'أستاذ'}
+GRADE_AR_F = {'PES': 'أستاذة التعليم العالي', 'PH': 'أستاذة مؤهلة', 'MCH': 'أستاذة محاضرة مؤهلة', 'MC': 'أستاذة محاضرة', 'P': 'أستاذة'}
+def grade_ar(code, sexe=''): return (GRADE_AR_F if sexe == 'F' else GRADE_AR).get(code, '')
 ETAB_DEFAUT, ETAB_AR_DEFAUT = 'Faculté des Sciences, Agadir', 'كلية العلوم بأگادير'
 CED_DEFAUT, CED_AR_DEFAUT = 'Sciences et Techniques et Sciences Médicales', 'العلوم والتقنيات والعلوم الطبية'
 DISCIPLINE_AR = {'informatique': 'الإعلاميات', 'biologie': 'البيولوجيا', 'chimie': 'الكيمياء', 'physique': 'الفيزياء',
@@ -297,13 +300,15 @@ def rang_role(role):
     for i, k in enumerate(ORDRE_ROLES):
         if r.startswith(k) or (k == 'directeur' and r.startswith('directrice')) or (k == 'co-directeur' and r.startswith('co-directrice')): return i
     return len(ORDRE_ROLES)
-def role_ar(role, i=0):
+def role_ar(role, i=0, sexe=''):
+    """Qualité du membre en arabe, accordée au genre (sexe 'F', ou rôle saisi au féminin)."""
     r = sans_accents(role).lower()
-    if not r: return 'رئيسا' if i == 1 else 'مشرفا' if i == 2 else 'عضوا'
-    if 'president' in r: return 'رئيسة' if 'presidente' in r else 'رئيسا'
-    if r.startswith('co-direct'): return 'مشرفة مشاركة' if 'trice' in r else 'مشرفا مشاركا'
-    if r.startswith('direct'): return 'مشرفة' if 'trice' in r else 'مشرفا'
-    return 'عضوا'
+    f = sexe == 'F' or 'presidente' in r or 'trice' in r
+    if not r: r = 'president' if i == 1 else 'directeur' if i == 2 else 'membre'
+    if 'president' in r: return 'رئيسة' if f else 'رئيسا'
+    if r.startswith('co-direct'): return 'مشرفة مشاركة' if f else 'مشرفا مشاركا'
+    if r.startswith('direct'): return 'مشرفة' if f else 'مشرفا'
+    return 'عضوة' if f else 'عضوا'
 
 
 def depuis_formulaire(d):
@@ -385,12 +390,19 @@ def valeurs(r):
              DATE_SOUT_AR=date_ar(d), DATE_NAISSANCE_AR=date_ar(r.get('DATE_NAISSANCE')),
              MENTION_AR=v.get('MENTION_AR') or MENTION_AR.get(txt(r.get('MENTION')).lower(), ''),
              FORMATION_AR=v.get('FORMATION_AR') or FORMATION_AR.get(txt(r.get('FORMATION')).lower(), ''))
+    # --- genre des membres du jury (Excel > rôle > listes locales > API genderize.io), pour l'arabe du diplôme
+    avec_nom = [i for i in range(1, NB_JURY + 1) if txt(r.get(f'J{i}_NOM'))]
+    res = genre.sexes_jury([(r.get(f'J{i}_PRENOM'), r.get(f'J{i}_SEXE'), r.get(f'J{i}_ROLE')) for i in avec_nom], deviner_sexe)
+    sexe_j = {i: s for i, (s, _) in zip(avec_nom, res)}
+    src = [s for _, s in res]
+    v['_genre_jury'] = (f"{src.count('api')} via API" if 'api' in src else '',
+                        ', '.join(f"{txt(r.get(f'J{i}_PRENOM'))} {txt(r.get(f'J{i}_NOM'))}" for i, (_, s) in zip(avec_nom, res) if not s))
     lignes = []
     for i in range(1, 8):
         na = txt(r.get(f'J{i}_NOM_AR'))
         if not na: continue
-        grade = GRADE_AR.get(txt(r.get(f'J{i}_AFFILIATION')).split(',')[0].strip(), '')
-        role = 'رئيسا' if i == 1 else 'مشرفا' if i == 2 else 'عضوا'
+        grade = grade_ar(txt(r.get(f'J{i}_AFFILIATION')).split(',')[0].strip(), sexe_j.get(i, ''))
+        role = role_ar('', i, sexe_j.get(i, ''))
         lignes.append(f"{na}، {grade} / {role}")
     for k in range(3): v[f'JURY_AR_{k+1}'] = lignes[k] if k < len(lignes) else BLANC
     v['_extras'] = lignes[3:]
@@ -422,9 +434,11 @@ def valeurs(r):
         v[f'JURY_{i}_ETABLISSEMENT'] = ', '.join(reste) if n else ''
         v[f'JURY_{i}_ROLE'] = role
         v[f'JURY_{i}_NOM_AR'] = txt(r.get(f'J{i}_NOM_AR')) or BLANC if n else ''
-        v[f'JURY_{i}_GRADE_AR'] = f"{GRADE_AR[code]} ،" if code in GRADE_AR else ''
-        v[f'JURY_{i}_GRADE_ETAB_AR'] = (' ، '.join(x for x in (GRADE_AR.get(code, ''), txt(r.get(f'J{i}_ETAB_AR')) or etab_ar(reste)) if x)) if n else ''
-        v[f'JURY_{i}_ROLE_AR'] = role_ar(role, i) if n else ''
+        sj = sexe_j.get(i, '')
+        v[f'JURY_{i}_SEXE'] = sj
+        v[f'JURY_{i}_GRADE_AR'] = f"{grade_ar(code, sj)} ،" if code in GRADE_AR else ''
+        v[f'JURY_{i}_GRADE_ETAB_AR'] = (' ، '.join(x for x in (grade_ar(code, sj), txt(r.get(f'J{i}_ETAB_AR')) or etab_ar(reste)) if x)) if n else ''
+        v[f'JURY_{i}_ROLE_AR'] = role_ar(role, i, sj) if n else ''
     return v
 
 
@@ -544,6 +558,10 @@ def generer():
                     sexe = txt(r.get('SEXE')).upper()[:1]
                     note_sexe = ('' if doc != 'diplome' else ' [sexe inconnu : diplôme au masculin, à vérifier]' if sexe not in ('M', 'F')
                                  else f" [{'femme' if sexe == 'F' else 'homme'}, déduit du prénom : à vérifier]" if r.get('SEXE_DEDUIT') else '')
+                    api_n, inconnus = v.get('_genre_jury', ('', ''))
+                    if doc == 'diplome':
+                        note_sexe += (f" [genre du jury : {api_n}, à vérifier]" if api_n else '') + \
+                                     (f" [genre du jury inconnu (masculin par défaut) : {inconnus}]" if inconnus else '')
                     note_spe = ' [spécialité absente : reprise de la discipline]' if r.get('SPECIALITE_DEDUITE') and doc in ('attestation', 'diplome', 'pv') else ''
                     rapport.append(f"OK : {qui} - {doc}" + (f" [arabe traduit automatiquement : {v['TRADUIT_AR']}]" if v.get('TRADUIT_AR') and doc in ('attestation', 'diplome') else '') + note_sexe + note_spe)
                 except Exception as e:                      # une erreur ne doit pas casser tout le zip
