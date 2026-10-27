@@ -10,7 +10,8 @@
   <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" id="d_attestation"><label class="form-check-label" for="d_attestation">Attestation de réussite</label></div>
   <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" id="d_invitation"><label class="form-check-label" for="d_invitation">Invitations au jury</label></div>
   <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" id="d_demande_rapport"><label class="form-check-label" for="d_demande_rapport">Demandes de rapport aux rapporteurs</label></div>
-  <div class="form-text">Le type (Doctorat ou HU) est lu dans la colonne <b>TYPE</b> de chaque ligne de l'Excel. Demandes de rapport : une lettre par membre du jury dont le rôle contient « Rapporteur ».</div></div></div>
+  <div class="form-check form-check-inline"><input class="form-check-input" type="checkbox" id="d_resume"><label class="form-check-label" for="d_resume">Résumé des avis des rapporteurs</label></div>
+  <div class="form-text">Le type (Doctorat ou HU) est lu dans la colonne <b>TYPE</b> de chaque ligne de l'Excel. Demandes de rapport : une lettre par membre du jury dont le rôle contient « Rapporteur ». Résumé des avis : doctorat uniquement, avec les directeurs et les rapporteurs du jury.</div></div></div>
 
 <div class="card mb-3"><div class="card-header fw-semibold">2. Fichier Excel</div><div class="card-body">
  <div class="input-group"><input type="file" id="f" class="form-control" accept=".xlsx"><button id="b" class="btn btn-primary">Charger</button></div>
@@ -31,14 +32,14 @@
 </div>
 <script>
 const DISPO={{ dispo|tojson }};let token='',C=[];
-const $=id=>document.getElementById(id), L={doctorat:'Doctorat',habilitation:'HU'}, NOMDOC={pv:'PV',diplome:'Diplôme',attestation:'Attestation',invitation:'Invitations',demande_rapport:'Demandes de rapport'};
-const DOCS=['pv','diplome','attestation','invitation','demande_rapport'];
+const $=id=>document.getElementById(id), L={doctorat:'Doctorat',habilitation:'HU'}, NOMDOC={pv:'PV',diplome:'Diplôme',attestation:'Attestation',invitation:'Invitations',demande_rapport:'Demandes de rapport',resume:'Résumé des avis'};
+const DOCS=['pv','diplome','attestation','invitation','demande_rapport','resume'];
 const docs=()=>DOCS.filter(d=>$('d_'+d).checked);
 const vis=()=>C.filter(c=>!$('flt').value||c.type==$('flt').value);
 function sel(){return [...document.querySelectorAll('.ck:checked')].map(e=>+e.value)}
 function count(){$('cnt').textContent=sel().length+' sélectionné(s) sur '+vis().length+' affiché(s) ('+C.length+' au total)'}
 function render(){const t=$('t');t.innerHTML='';vis().forEach(c=>{const man=new Set(),ind=[];
- docs().forEach(d=>{if(!DISPO[c.type][d])ind.push(NOMDOC[d]+' '+L[c.type]+' indisponible');c['manque_'+d].forEach(x=>man.add(x))});
+ docs().forEach(d=>{if(!(DISPO[c.type]||{})[d])ind.push(NOMDOC[d]+' '+L[c.type]+' indisponible');(c['manque_'+d]||[]).forEach(x=>man.add(x))});
  const tr=t.insertRow();tr.insertCell().innerHTML=`<input type="checkbox" class="form-check-input ck" value="${c.i}">`;
  tr.insertCell().innerHTML=`<span class="badge ${c.type=='doctorat'?'text-bg-primary':'text-bg-info'}">${L[c.type]}</span>`;
  [c.nom,c.prenom,c.date].forEach(x=>tr.insertCell().textContent=x);

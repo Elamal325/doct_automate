@@ -1,4 +1,4 @@
-"""Crée modeles/doctorat/Diplome__.docx (champs {{...}}) à partir du modèle شهادة_الدكتوراه.docx."""
+"""Crée modeles/doctorat/Diplome.docx (champs {{...}}) à partir du modèle شهادة_الدكتوراه.docx."""
 from docfill import make_template
 R=[(r'procès-verbal du jury de soutenance en date du\s*:','procès-verbal du jury de soutenance en date du : {{DATE_SOUTENANCE}}'),
  (r'L’étudiant\(e\):\s*…+','L’étudiant(e): {{NOM_COMPLET}}'),(r'…+','{{CIN}}'),(r'…+','{{CNE}}'),
@@ -13,4 +13,4 @@ R=[(r'procès-verbal du jury de soutenance en date du\s*:','procès-verbal du ju
  (r'\.{5,}',' {{LIEU_REDACTION_AR}} '),(r'في\s*$','في {{DATE_SOUT_AR}}'),
  (r'^.*رئيسا\s*$','{{JURY_AR_1}}'),(r'^.*مشرفا\s*$','{{JURY_AR_2}}'),(r'^.*عضوا\s*$','{{JURY_AR_3}}')]
 d,left=make_template('/mnt/user-data/uploads/شهادة_الدكتوراه.docx',R)
-open('modeles/doctorat/Diplome__.docx', 'wb').write(d); print('non appliquées:', left)
+open('modeles/doctorat/Diplome.docx', 'wb').write(d); print('non appliquées:', left)

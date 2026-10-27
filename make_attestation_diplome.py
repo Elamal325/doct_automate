@@ -1,4 +1,4 @@
-"""Crée modeles/doctorat/Attestation.docx et modeles/doctorat/Diplome__.docx (champs {{...}})
+"""Crée modeles/doctorat/Attestation.docx et modeles/doctorat/Diplome.docx (champs {{...}})
 à partir des exemples réels OUBRAI (modeles/sources/*.docx, convertis depuis les RTF fournis).
 
 Lancer :  python make_attestation_diplome.py
@@ -278,8 +278,8 @@ def construire_diplome_hu():
 if __name__ == '__main__':
     os.makedirs(OUT, exist_ok=True)
     HU = os.path.join(BASE, 'modeles', 'habilitation')
-    for dossier, nom, f in ((OUT, 'Attestation.docx', construire_attestation), (OUT, 'Diplome__.docx', construire_diplome),
-                            (HU, 'Attestation.docx', construire_attestation_hu), (HU, 'Diplome__.docx', construire_diplome_hu)):
+    for dossier, nom, f in ((OUT, 'Attestation.docx', construire_attestation), (OUT, 'Diplome.docx', construire_diplome),
+                            (HU, 'Attestation.docx', construire_attestation_hu), (HU, 'Diplome.docx', construire_diplome_hu)):
         data, manque = f()
         open(os.path.join(dossier, nom), 'wb').write(data)
         print(os.path.basename(dossier), nom, 'créé -', 'règles non appliquées :', manque or 'aucune')

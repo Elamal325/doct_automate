@@ -225,6 +225,17 @@ def _remplir(root, values, extras=None):
                     p.addnext(q)
         # 3) formes VML
         _agrandir_vml(root, extras)
+    # 3a) lignes de tableau optionnelles : {{??CLE}} -> la ligne (w:tr) est supprimée si values[CLE] est vide
+    for tr in list(root.iter(_w('tr'))):
+        m = re.search(r'\{\{\?\?(\w+)\}\}', ''.join(t.text or '' for t in tr.iter(T)))
+        if not m:
+            continue
+        if values.get(m.group(1)):
+            for p in tr.iter(P):
+                while replace_in_paragraph(p, r'\{\{\?\?\w+\}\}', ''):
+                    pass
+        elif tr.getparent() is not None:
+            tr.getparent().remove(tr)
     # 3b) paragraphes optionnels : {{?CLE}} -> le paragraphe est supprimé si values[CLE] est vide
     for p in list(root.iter(P)):
         if p.find('.//' + P) is not None:

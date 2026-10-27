@@ -11,7 +11,7 @@ app = Flask(__name__)
 BASE = os.path.dirname(os.path.abspath(__file__))
 UP = os.path.join(BASE, 'uploads'); MOD = os.path.join(BASE, 'modeles')
 PROGRAMMES = {'doctorat': 'Doctorat', 'habilitation': 'Habilitation universitaire (brouillon)'}
-DOCS_VALIDES = ('pv', 'diplome', 'attestation', 'invitation')
+DOCS_VALIDES = ('pv', 'diplome', 'attestation', 'invitation', 'resume')
 JOURS = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche']
 MOIS = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre']
 os.makedirs(UP, exist_ok=True)
@@ -341,6 +341,8 @@ def depuis_formulaire(d):
         j = jury[i]; nom, pre, pre_ar = nom_maj(j.get('NOM')), prenom_propre(j.get('PRENOM')), collapse(j.get('PRENOM_AR'))
         if not nom: continue
         if not pre and pre_ar and not ARABE.search(pre_ar): pre, pre_ar = prenom_propre(pre_ar), ''   # prénom latin saisi dans la case arabe
+        elif ARABE.search(pre) and not ARABE.search(pre_ar):                                        # prénom arabe saisi dans la case latine
+            pre, pre_ar = prenom_propre(pre_ar), collapse(j.get('PRENOM'))
         raw = txt(j.get('GRADE')); code = (raw.split(':')[0] if ':' in raw else raw).strip().upper()
         membres.append(dict(nom=nom, pre=pre, ar=' '.join(x for x in (collapse(j.get('NOM_AR')), pre_ar) if x),
                             code=code if code in GRADE_FR else '', etab=collapse(j.get('ETAB')), role=role_fr(txt(j.get('ROLE')))))
@@ -447,15 +449,115 @@ REQ_ATT = ['NOM','PRENOM','SEXE','DATE_NAISSANCE','LIEU_NAISSANCE','CNE','CIN','
 REQ_ATT_HU = ['NOM','PRENOM','SEXE','DATE_NAISSANCE','LIEU_NAISSANCE','CNE','CIN','DISCIPLINE','SPECIALITE','DATE_SOUTENANCE','J1_NOM','ROLES_JURY']
 REQ_DIP_HU = ['NOM','PRENOM','NOM_AR','DATE_NAISSANCE','CIN','SPECIALITE','SPECIALITE_AR','DATE_SOUTENANCE','J1_NOM','ROLES_JURY','NOMS_JURY_AR']
 REQ_INV = ['NOM','PRENOM','SEXE','TITRE','DATE_SOUTENANCE','HEURE','LIEU_SOUTENANCE','J1_NOM','J1_PRENOM','J1_AFFILIATION','J2_NOM','J2_PRENOM','J2_AFFILIATION']
+REQ_RES = ['NOM','PRENOM','CIN','CNE','TITRE','DATE_SOUTENANCE','FORMATION','J1_NOM','J1_ROLE']
 REQ_DIP = ['NOM','PRENOM','NOM_AR','DATE_NAISSANCE','LIEU_NAISSANCE','LIEU_NAISSANCE_AR','CNE','CIN','DISCIPLINE','DISCIPLINE_AR','SPECIALITE','SPECIALITE_AR','TITRE','TITRE_AR','MENTION','DATE_SOUTENANCE','J1_NOM','ROLES_JURY','NOMS_JURY_AR']
 
 
 def dispo(prog, doc):
-    f = {'pv': ['Page_0.docx','Page_1.docx','Page_2.docx'], 'diplome': ['Diplome.docx'], 'attestation': ['Attestation.docx'], 'invitation': ['Invitation.docx']}[doc]
+    f = {'pv': ['Page_0.docx','Page_1.docx','Page_2.docx'], 'diplome': ['Diplome.docx'], 'attestation': ['Attestation.docx'],
+         'invitation': ['Invitation.docx'], 'resume': ['Resume.docx']}[doc]
     return all(os.path.exists(os.path.join(MOD, prog, x)) for x in f)
 
 
 GRADE_FR = {'PES': "Professeur de l'Enseignement Supérieur", 'PH': 'Professeur Habilité', 'MCH': 'Maître de Conférences Habilité', 'MC': 'Maître de Conférences', 'P': 'Professeur'}
+
+
+# ------------------------------------------------------------------ Résumé des avis des rapporteurs (Resume.docx)
+NB_DIR_RES, NB_RAP_RES = 3, 6
+SIGLES_ETAB = {     # établissement (minuscules, sans accents) -> sigle, comme sur le modèle (« FS, Agadir »)
+    'faculte des sciences': 'FS', 'faculte des sciences et techniques': 'FST', 'faculte polydisciplinaire': 'FP',
+    'ecole superieure de technologie': 'EST', 'ecole nationale des sciences appliquees': 'ENSA',
+    'ecole nationale de commerce et de gestion': 'ENCG', 'faculte de medecine et de pharmacie': 'FMP',
+    "ecole nationale superieure d'informatique et d'analyse des systemes": 'ENSIAS', 'ecole normale superieure': 'ENS',
+    'faculte des lettres et des sciences humaines': 'FLSH', 'ecole nationale superieure des arts et metiers': 'ENSAM',
+    'faculte des sciences juridiques, economiques et sociales': 'FSJES', 'faculte des sciences juridiques economiques et sociales': 'FSJES',
+    'institut agronomique et veterinaire hassan ii': 'IAV', 'faculte des sciences appliquees': 'FSA',
+    'faculte des sciences de l\'education': 'FSE', 'ecole nationale d\'agriculture': 'ENA'}
+MOTS_VIDES = {'de', 'la', 'le', 'les', 'des', 'du', 'et', 'd', 'l', 'en', 'aux', 'au', 'a'}
+
+
+def _cle_etab(s):
+    """Clé tolérante aux fautes du formulaire : « Fcaulté de Sciences » -> 'faculte des sciences'."""
+    s = re.sub(r'\s+', ' ', sans_accents(s).lower().replace('’', "'")).strip(' .')
+    s = re.sub(r'\b(fcaulte|faculte|facultee|fac)\b', 'faculte', s)
+    s = re.sub(r'\b(faculte|ecole[\w ]*?) de sciences\b', r'\1 des sciences', s)
+    return re.sub(r'\s*\(.*?\)', '', s)                              # « École … (EST) » -> sans le sigle entre parenthèses
+
+
+def etab_court(reste, virgule=True):
+    """['Faculté des Sciences', 'Agadir'] -> 'FS, Agadir' ; ['Faculté des Sciences', 'UIZ', 'Agadir'] -> 'FS, Agadir' (ville = dernière partie).
+    Texte d'origine si l'établissement n'a pas de sigle connu."""
+    sep = ', ' if virgule else ' '
+    if len(reste) >= 2:
+        for n in range(len(reste) - 1, 0, -1):                      # le plus long d'abord
+            s = SIGLES_ETAB.get(_cle_etab(', '.join(reste[:n])))
+            if s: return s + sep + reste[-1]
+    elif reste and SIGLES_ETAB.get(_cle_etab(reste[0])):
+        return SIGLES_ETAB[_cle_etab(reste[0])]
+    return ', '.join(reste)
+
+
+def sigle_formation(r):
+    """Colonne « Sigle formation » si elle existe, sinon initiales : « Sciences de la Vie et Ressources Naturelles » -> SVRN."""
+    for k in ('FORMATION_SIGLE', 'SIGLE_FORMATION', 'SIGLE_DE_LA_FORMATION', 'SIGLE'):
+        if txt(r.get(k)): return txt(r.get(k)), False
+    f = txt(r.get('FORMATION'))
+    mots = [m for m in re.split(r"[\s,&'’/\-]+", sans_accents(f)) if m and m.lower() not in MOTS_VIDES]
+    return (''.join(m[0].upper() for m in mots), True) if len(mots) >= 3 else (f, False)
+
+
+def annee_inscription(r):
+    """« 2021/2022 » ; une date (01/10/2021) ou une année (2021) donnent l'année universitaire."""
+    for k in ('ANNEE_INSCRIPTION', 'ANNEE_D_INSCRIPTION', 'ANNEE_DE_PREMIERE_INSCRIPTION', 'ANNEE_DE_1ERE_INSCRIPTION',
+              'ANNEE_UNIVERSITAIRE_D_INSCRIPTION', 'DATE_D_INSCRIPTION', 'DATE_INSCRIPTION', 'DATE_DE_PREMIERE_INSCRIPTION'):
+        x = r.get(k)
+        if isinstance(x, (dt.date, dt.datetime)):
+            a = x.year if x.month >= 9 else x.year - 1
+            return f'{a}/{a + 1}'
+        if isinstance(x, float) and x == int(x): x = int(x)
+        if isinstance(x, int) and 1990 < x < 2100: return f'{x}/{x + 1}'
+        if txt(x): return txt(x)
+    return ''
+
+
+def resume_valeurs(r, v):
+    """Champs propres à Resume.docx (candidat : RES_* ; directeurs : DIR_k_* ; rapporteurs : RAP_k_*) + notes pour RAPPORT.txt."""
+    notes = []
+    sigle, deduit = sigle_formation(r)
+    if deduit: notes.append(f'formation doctorale abrégée en « {sigle} » : à vérifier')
+    w = dict(RES_NOM=', '.join(x for x in (txt(r.get('NOM')), txt(r.get('PRENOM'))) if x) or BLANC,
+             RES_TYPE=txt(r.get('TYPE_DOCTORAT')) or 'DCED',
+             RES_ANNEE_INSCRIPTION=annee_inscription(r) or BLANC,
+             RES_FORMATION=sigle or BLANC)
+    if w['RES_ANNEE_INSCRIPTION'] == BLANC: notes.append("année d'inscription absente")
+    disc_cand = txt(r.get('DISCIPLINE'))                               # discipline d'un membre inconnue : celle du candidat
+    dirs, raps, avis_defaut = [], [], 0
+    for i in range(1, NB_JURY + 1):
+        n, p = txt(r.get(f'J{i}_NOM')), txt(r.get(f'J{i}_PRENOM'))
+        if not n: continue
+        role = sans_accents(v.get(f'JURY_{i}_ROLE')).lower()
+        parts = [x.strip() for x in txt(r.get(f'J{i}_AFFILIATION')).split(',') if x.strip()]
+        code = parts[0] if parts and parts[0] in GRADE_FR else ''
+        reste = parts[1:] if code else parts
+        disc = txt(r.get(f'J{i}_DISCIPLINE')) or txt(r.get(f'J{i}_SPECIALITE')) or disc_cand
+        if role.startswith(('direct', 'co-direct', 'codirect')):
+            dirs.append(dict(NOM=f'{n}, {p[:1]}.' if p else n, GRADE=code, DISC=disc, ETAB=etab_court(reste)))
+        if 'rapporteur' in role:
+            avis = txt(r.get(f'J{i}_AVIS'))
+            if not avis: avis = 'Favorable'; avis_defaut += 1
+            raps.append(dict(NOM=f'{n}, {p[:1]}.' if p else n, GRADE=code, DISC=disc, ETAB=etab_court(reste), AVIS=avis))
+    if not dirs and txt(r.get('ENCADRANT')):                          # directeur absent du jury : on reprend l'encadrant
+        dirs.append(dict(NOM=txt(r.get('ENCADRANT')), GRADE='', DISC=disc_cand, ETAB=''))
+    for nom, liste, nb in (('DIR', dirs, NB_DIR_RES), ('RAP', raps, NB_RAP_RES)):
+        for k in range(1, nb + 1):
+            m = liste[k - 1] if k <= len(liste) else None
+            w[f'{nom}_{k}'] = 'x' if m else ''                            # {{?DIR_k}} / {{?RAP_k}} : ligne supprimée si vide
+            for c in ('NOM', 'GRADE', 'DISC', 'ETAB', 'AVIS'): w[f'{nom}_{k}_{c}'] = (m or {}).get(c, '')
+        if len(liste) > nb: notes.append(f'{len(liste) - nb} {nom.lower()} non affiché(s) (max {nb})')
+    if not dirs: notes.append('aucun directeur de thèse')
+    if not raps: notes.append('aucun rapporteur (rôles du jury absents ?)')
+    if avis_defaut: notes.append(f'avis « Favorable » par défaut pour {avis_defaut} rapporteur(s)')
+    return dict(v, **w), notes
 
 
 def invitations(r, v, prog):
@@ -514,7 +616,7 @@ def upload():
         os.remove(path)
         return jsonify(erreur='Aucune ligne de données dans le fichier'), 400
     return jsonify(token=token, candidats=[dict(i=i, type=prog_of(r), nom=txt(r.get('NOM')), prenom=txt(r.get('PRENOM')), date=date_fr(r.get('DATE_SOUTENANCE')),
-        manque_pv=manquants(r, REQ_PV), manque_diplome=manquants(r, REQ_DIP_HU if prog_of(r) == 'habilitation' else REQ_DIP), manque_attestation=manquants(r, REQ_ATT_HU if prog_of(r) == 'habilitation' else REQ_ATT), manque_invitation=manquants(r, REQ_INV)) for i, r in enumerate(rows)])
+        manque_pv=manquants(r, REQ_PV), manque_diplome=manquants(r, REQ_DIP_HU if prog_of(r) == 'habilitation' else REQ_DIP), manque_attestation=manquants(r, REQ_ATT_HU if prog_of(r) == 'habilitation' else REQ_ATT), manque_invitation=manquants(r, REQ_INV), manque_resume=manquants(r, REQ_RES)) for i, r in enumerate(rows)])
 
 
 @app.post('/api/generer')
@@ -553,6 +655,9 @@ def generer():
                         for k, jn, w in invitations(r, v, prog): z.writestr(f'{base}Invitations/Invitation_J{k}_{jn}.docx', fill(os.path.join(MOD, prog, 'Invitation.docx'), w))
                     elif doc == 'attestation':
                         z.writestr(f'{base}Attestation_{nom}.docx', avec_codes_barres(fill(os.path.join(MOD, prog, 'Attestation.docx'), v), v))
+                    elif doc == 'resume':
+                        w, notes_res = resume_valeurs(r, v)
+                        z.writestr(f'{base}Resume_{nom}.docx', fill(os.path.join(MOD, prog, 'Resume.docx'), w))
                     else:
                         z.writestr(f'{base}Diplome_{nom}.docx', aligner(accorder(avec_codes_barres(fill(os.path.join(MOD, prog, 'Diplome.docx'), v), v), r.get('SEXE'))))
                     sexe = txt(r.get('SEXE')).upper()[:1]
@@ -562,6 +667,7 @@ def generer():
                     if doc == 'diplome':
                         note_sexe += (f" [genre du jury : {api_n}, à vérifier]" if api_n else '') + \
                                      (f" [genre du jury inconnu (masculin par défaut) : {inconnus}]" if inconnus else '')
+                    if doc == 'resume' and notes_res: note_sexe += ' [' + ' ; '.join(notes_res) + ']'
                     note_spe = ' [spécialité absente : reprise de la discipline]' if r.get('SPECIALITE_DEDUITE') and doc in ('attestation', 'diplome', 'pv') else ''
                     rapport.append(f"OK : {qui} - {doc}" + (f" [arabe traduit automatiquement : {v['TRADUIT_AR']}]" if v.get('TRADUIT_AR') and doc in ('attestation', 'diplome') else '') + note_sexe + note_spe)
                 except Exception as e:                      # une erreur ne doit pas casser tout le zip
