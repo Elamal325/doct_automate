@@ -162,7 +162,7 @@ def _placer_codes_barres(root):
 # les colonnes 1 et 3 ne contiennent plus que des lignes vides. La plus haute fixait pourtant la hauteur de l'en-tête,
 # d'où un grand blanc entre « Diplôme de Doctorat » et « Vu la loi… » : ces lignes vides sont réduites à presque rien.
 LIGNE_VIDE_ENTETE = 20             # twips (1 pt) : hauteur d'une ligne vide de l'en-tête
-ESPACE_TITRE_PREAMBULE = 80        # twips (4 pt) entre « Diplôme de Doctorat » et « Vu la loi… » (200 dans le modèle)
+ESPACE_TITRE_PREAMBULE = 95        # twips (4 pt) entre « Diplôme de Doctorat » et « Vu la loi… » (200 dans le modèle)
 MC = 'http://schemas.openxmlformats.org/markup-compatibility/2006'
 INVISIBLE = re.compile(r'^[\s\u200b\u200e\u200f]*$')
 
