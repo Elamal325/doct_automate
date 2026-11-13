@@ -1,4 +1,4 @@
-"""Crée modeles/doctorat/Diplome.docx (champs {{...}}) à partir du modèle شهادة_الدكتوراه.docx."""
+"""Crée modeles/doctorat/Diplome_.docx (champs {{...}}) à partir du modèle شهادة_الدكتوراه.docx."""
 from docfill import make_template
 R=[(r'procès-verbal du jury de soutenance en date du\s*:','procès-verbal du jury de soutenance en date du : {{DATE_SOUTENANCE}}'),
  (r'L’étudiant\(e\):\s*…+','L’étudiant(e): {{NOM_COMPLET}}'),(r'…+','{{CIN}}'),(r'…+','{{CNE}}'),

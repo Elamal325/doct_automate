@@ -31,7 +31,7 @@ C39 = {
  'Z':'nwwnwnnnn','-':'nwnnnnwnw','.':'wwnnnnwnn',' ':'nwwnnnwnn','*':'nwnnwnwnn',
  '$':'nwnwnwnnn','/':'nwnwnnnwn','+':'nwnnnwnwn','%':'nnnwnwnwn'}
 
-# Cadres du modèle Diplome.docx : 28,3 pt x 128,1 pt (360045 x 1626870 EMU) -> l'image tient dedans
+# Cadres du modèle Diplome_.docx : 28,3 pt x 128,1 pt (360045 x 1626870 EMU) -> l'image tient dedans
 LARGEUR_EMU, HAUTEUR_EMU = 252000, 1520000          # ~0,7 x 4,2 cm, centré : ~1,5 mm d'écart avec le texte
 
 

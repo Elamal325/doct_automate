@@ -1,4 +1,5 @@
-import io, os, re, uuid, zipfile, unicodedata, datetime as dt
+import io, os, re, json, uuid, zipfile, unicodedata, datetime as dt
+import urllib.request, urllib.parse
 from flask import Flask, request, jsonify, render_template, send_file, abort
 from openpyxl import load_workbook
 from docfill import fill
@@ -41,6 +42,7 @@ def etab_ar(parts):
         if inst and ville: return f'{inst} ، {ville}'
     return ' ، '.join(parts)
 MENTION_AR = {'très honorable': 'مشرف جدا', 'honorable': 'مشرف'}
+MENTION_DEFAUT = 'Très Honorable'          # mention si la colonne « Mention » est vide ou absente (autre choix : « Honorable »)
 FORMATION_AR = {'sciences et techniques & sciences médicales': 'العلوم والتقنيات والعلوم الطبية'}
 
 
@@ -96,7 +98,77 @@ def lire(path):
         data.append(d)
     if 'HORODATEUR' in cols:                    # export du formulaire (Doctorants_*.xlsx)
         data = [depuis_formulaire(d) for d in data]
+    completer_sexes(data)
     return [enrichir_ar(d) for d in data]
+
+
+# ------------------------------------------------------------------ sexe du doctorant : Excel > listes locales > API genderize.io
+GENDERIZE_URL = 'https://api.genderize.io'
+GENDERIZE_KEY = os.environ.get('GENDERIZE_API_KEY', '')     # sans clé : 100 prénoms / jour (gratuit)
+GENRE_CACHE = os.path.join(BASE, 'genre_cache.json')        # prénoms déjà demandés -> pas de 2e appel (upload puis génération)
+SEUIL_API = 0.8                                             # probabilité minimale pour accepter la réponse de l'API
+
+
+def code_sexe(v):
+    """« Féminin », « F », « femme »… -> 'F' ; « Masculin », « M », « H »… -> 'M' ; sinon ''."""
+    s = sans_accents(v).lower().strip()
+    if s in ('f', 'femme', 'feminin', 'female', 'fille'): return 'F'
+    if s in ('m', 'h', 'homme', 'masculin', 'male', 'garcon'): return 'M'
+    return ''
+
+
+def premier_prenom(prenom):
+    p = sans_accents(collapse(prenom)).lower().replace('-', ' ').split()
+    return p[0] if p else ''
+
+
+def _genderize(prenoms, pays=True):
+    """Appel de l'API par lots de 10 -> {prenom: (gender, probabilite)} ; lève une exception si l'API est injoignable."""
+    out = {}
+    for k in range(0, len(prenoms), 10):
+        lot = prenoms[k:k + 10]
+        q = [('name[]', p) for p in lot] + ([('country_id', 'MA')] if pays else []) + ([('apikey', GENDERIZE_KEY)] if GENDERIZE_KEY else [])
+        with urllib.request.urlopen(f'{GENDERIZE_URL}?{urllib.parse.urlencode(q)}', timeout=5) as rep:
+            res = json.load(rep)
+        for p, x in zip(lot, res if isinstance(res, list) else [res]):
+            out[p] = (x.get('gender'), float(x.get('probability') or 0))
+    return out
+
+
+def sexes_api(prenoms):
+    """{prenom: 'M' / 'F' / ''} via genderize.io (Maroc d'abord, puis tous pays). '' si inconnu, incertain ou API injoignable."""
+    try:
+        with open(GENRE_CACHE, encoding='utf-8') as f: cache = json.load(f)
+    except Exception: cache = {}
+    demander = [p for p in dict.fromkeys(prenoms) if p and p not in cache]
+    if demander:
+        try:
+            res = _genderize(demander)
+            flous = [p for p in demander if not res[p][0]]                 # prénom absent des données marocaines
+            if flous: res.update(_genderize(flous, pays=False))
+            for p, (g, prob) in res.items():
+                cache[p] = ('M' if g == 'male' else 'F' if g == 'female' else '') if prob >= SEUIL_API else ''
+            with open(GENRE_CACHE, 'w', encoding='utf-8') as f: json.dump(cache, f, ensure_ascii=False, indent=0)
+        except Exception as e:                                            # hors ligne, quota dépassé… : masculin par défaut
+            app.logger.warning('genderize.io indisponible : %s', e)
+    return {p: cache.get(p, '') for p in prenoms}
+
+
+def completer_sexes(data):
+    """Remplit SEXE (M/F) de chaque doctorant : colonne « Genre »/« Sexe » > listes PRENOMS_M/F > API.
+    SEXE_DEDUIT = 'liste' ou 'api' quand le sexe vient du prénom (signalé dans RAPPORT.txt)."""
+    reste = []
+    for d in data:
+        d['SEXE'] = code_sexe(d.get('SEXE') or d.get('GENRE'))
+        if d['SEXE']: d['SEXE_DEDUIT'] = ''; continue
+        d['SEXE'] = deviner_sexe(d.get('PRENOM'))
+        if d['SEXE']: d['SEXE_DEDUIT'] = 'liste'
+        else: d['SEXE_DEDUIT'] = ''; reste.append(d)
+    if reste:
+        api = sexes_api([premier_prenom(d.get('PRENOM')) for d in reste])
+        for d in reste:
+            s = api.get(premier_prenom(d.get('PRENOM')), '')
+            if s: d['SEXE'], d['SEXE_DEDUIT'] = s, 'api'
 
 
 # ------------------------------------------------------------------ traduction de secours (si traduction_ar ne trouve rien)
@@ -212,6 +284,7 @@ def enrichir_ar(d):
     mettre('DISCIPLINE_AR', _tr('discipline', d.get('DISCIPLINE')) or traduire_terme(d.get('DISCIPLINE')), 'discipline')
     mettre('SPECIALITE_AR', _tr('specialite', d.get('SPECIALITE')) or traduire_terme(d.get('SPECIALITE')) or
            (txt(d.get('DISCIPLINE_AR')) if d.get('SPECIALITE_DEDUITE') else ''), 'spécialité')
+    d['MENTION'] = mention_propre(d.get('MENTION')) or MENTION_DEFAUT    # « Très Honorable » par défaut
     mettre('MENTION_AR', _tr('mention', d.get('MENTION')) or traduire_terme(d.get('MENTION')), 'mention')
     mettre('FORMATION_AR', _tr('formation', d.get('FORMATION')) or traduire_terme(d.get('FORMATION')), 'formation')
     mettre('CED_AR', traduire_terme(d.get('CED')), 'CED')
@@ -244,6 +317,7 @@ ALIAS = {
     'CED_EN_ARABE': 'CED_AR', 'ADRESSE_E_MAIL': 'EMAIL', 'NUMERO_DE_TELEPHONE': 'TELEPHONE'}
 JURY_COL = re.compile(r'^(NOM|PRENOM|GRADE|ROLE)_DU_MEMBRE_DU_JURY_N_(\d+)(_EN_ARABE)?$')
 JURY_ETAB = re.compile(r'^ETABLISSEMENT_D_AFFILIATION_DU_MEMBRE_DU_JURY_N_(\d+)')
+JURY_GENRE = re.compile(r'^(?:GENRE|SEXE)_DU_MEMBRE_DU_JURY_N_(\d+)$')
 ARABE = re.compile(r'[\u0600-\u06FF]')
 PRENOMS_M = set('''mohamed mohammed ahmed adnane abdelghani abdellah abdelaziz abderrahim abderrahmane abdelhamid abdelkader abdelilah
  abdessamad abdelouahed aziz azidine said hassan hicham mustapha mounir karim omar youssef yassine zohayr zouhair anas hamza adil redouan
@@ -321,6 +395,8 @@ def depuis_formulaire(d):
             jury.setdefault(int(m.group(2)), {})[m.group(1) + ('_AR' if m.group(3) else '')] = v; continue
         m = JURY_ETAB.match(k)
         if m: jury.setdefault(int(m.group(1)), {})['ETAB'] = v; continue
+        m = JURY_GENRE.match(k)
+        if m: jury.setdefault(int(m.group(1)), {})['SEXE'] = v; continue
         out[ALIAS.get(k, k)] = v
     out['NOM'], out['PRENOM'] = nom_maj(out.get('NOM')), prenom_propre(out.get('PRENOM'))
     cne = out.get('CNE')
@@ -329,12 +405,10 @@ def depuis_formulaire(d):
     for k in ('NOM_AR', 'PRENOM_AR', 'LIEU_NAISSANCE_AR', 'SPECIALITE', 'LIEU_SOUTENANCE', 'ENCADRANT'): out[k] = collapse(out.get(k))
     out['LIEU_NAISSANCE'] = casse_propre(out.get('LIEU_NAISSANCE'))
     out['DISCIPLINE'] = casse_propre(out.get('DISCIPLINE'))
-    out['MENTION'] = mention_propre(out.get('MENTION'))
+    out['MENTION'] = mention_propre(out.get('MENTION')) or MENTION_DEFAUT
     if not txt(out.get('DISCIPLINE_AR')): out['DISCIPLINE_AR'] = DISCIPLINE_AR.get(sans_accents(out['DISCIPLINE']).lower(), '')
     out['TITRE'] = collapse(out.get('NOUVEAU_TITRE') or out.get('TITRE')).rstrip('.')
     if sans_accents(out.get('CED')).lower().startswith('centre'): out['CED'] = ''     # « Centre d'Études Doctorales » = pas le nom du CED
-    if not txt(out.get('SEXE')):
-        out['SEXE'] = deviner_sexe(out['PRENOM']); out['SEXE_DEDUIT'] = 'oui' if out['SEXE'] else ''
     # --- jury
     membres = []
     for i in sorted(jury):
@@ -345,7 +419,8 @@ def depuis_formulaire(d):
             pre, pre_ar = prenom_propre(pre_ar), collapse(j.get('PRENOM'))
         raw = txt(j.get('GRADE')); code = (raw.split(':')[0] if ':' in raw else raw).strip().upper()
         membres.append(dict(nom=nom, pre=pre, ar=' '.join(x for x in (collapse(j.get('NOM_AR')), pre_ar) if x),
-                            code=code if code in GRADE_FR else '', etab=collapse(j.get('ETAB')), role=role_fr(txt(j.get('ROLE')))))
+                            code=code if code in GRADE_FR else '', etab=collapse(j.get('ETAB')), role=role_fr(txt(j.get('ROLE'))),
+                            sexe=code_sexe(j.get('SEXE'))))
     roles = [m['role'] for m in membres]
     if membres and all(roles):
         membres.sort(key=lambda m: rang_role(m['role']))                      # président, directeur, rapporteurs, examinateurs...
@@ -356,7 +431,7 @@ def depuis_formulaire(d):
     for n, m in enumerate(membres[:NB_JURY], 1):
         out[f'J{n}_NOM'], out[f'J{n}_PRENOM'], out[f'J{n}_NOM_AR'], out[f'J{n}_ROLE'] = m['nom'], m['pre'], m['ar'], m['role']
         out[f'J{n}_AFFILIATION'] = ', '.join(x for x in (m['code'], m['etab']) if x)
-        out[f'J{n}_SEXE'] = deviner_sexe(m['pre'])
+        out[f'J{n}_SEXE'] = m['sexe'] or deviner_sexe(m['pre'])          # colonne « Genre du membre » si remplie
     out['ROLES_JURY'] = 'ok' if membres and all(m['role'] for m in membres) else ''
     out['NOMS_JURY_AR'] = 'ok' if membres and all(m['ar'] for m in membres) else ''
     return out
@@ -380,7 +455,8 @@ def valeurs(r):
              NE_DIPLOME='née' if femme else 'né',
              ETUDIANT_AR='الطالبة' if femme else 'الطالب',
              NE_AR='المزدادة' if femme else 'المزداد',
-             OBTENU_AR='أحرزت' if femme else 'أحرز')
+             OBTENU_AR='أحرزت' if femme else 'أحرز',
+             CIVILITE_AR='السيدة' if femme else 'السيد')
     for i in range(1, NB_JURY + 1):
         n, p = txt(r.get(f'J{i}_NOM')), txt(r.get(f'J{i}_PRENOM'))
         v[f'J{i}_COURT'] = f"{p[:1]}. {n}" if n else ''
@@ -454,8 +530,15 @@ REQ_ATR = ['NOM','PRENOM','SEXE','TITRE','DATE_SOUTENANCE','J1_NOM','ROLES_JURY'
 REQ_DIP = ['NOM','PRENOM','NOM_AR','DATE_NAISSANCE','LIEU_NAISSANCE','LIEU_NAISSANCE_AR','CNE','CIN','DISCIPLINE','DISCIPLINE_AR','SPECIALITE','SPECIALITE_AR','TITRE','TITRE_AR','MENTION','DATE_SOUTENANCE','J1_NOM','ROLES_JURY','NOMS_JURY_AR']
 
 
+def fichier_diplome(prog):
+    """Accepte Diplome.docx, Diplome_.docx ou Diplome.docx (premier trouvé)."""
+    for n in ('Diplome.docx', 'Diplome_.docx', 'Diplome.docx'):
+        if os.path.exists(os.path.join(MOD, prog, n)): return n
+    return 'Diplome.docx'
+
+
 def dispo(prog, doc):
-    f = {'pv': ['Page_0.docx','Page_1.docx','Page_2.docx'], 'diplome': ['Diplome.docx'], 'attestation': ['Attestation.docx'],
+    f = {'pv': ['Page_0.docx','Page_1.docx','Page_2.docx'], 'diplome': [fichier_diplome(prog)], 'attestation': ['Attestation.docx'],
          'invitation': ['Invitation.docx'], 'resume': ['Resume.docx'],
          'attestation_rapporteur': ['Attestation_rapporteur.docx']}[doc]
     return all(os.path.exists(os.path.join(MOD, prog, x)) for x in f)
@@ -707,10 +790,10 @@ def generer():
                         w, notes_res = resume_valeurs(r, v)
                         z.writestr(f'{base}Resume_{nom}.docx', fill(os.path.join(MOD, prog, 'Resume.docx'), w))
                     else:
-                        z.writestr(f'{base}Diplome_{nom}.docx', aligner(accorder(avec_codes_barres(fill(os.path.join(MOD, prog, 'Diplome.docx'), v), v), r.get('SEXE'))))
+                        z.writestr(f'{base}Diplome_{nom}.docx', aligner(accorder(avec_codes_barres(fill(os.path.join(MOD, prog, fichier_diplome(prog)), v), v), r.get('SEXE'))))
                     sexe = txt(r.get('SEXE')).upper()[:1]
                     note_sexe = ('' if doc != 'diplome' else ' [sexe inconnu : diplôme au masculin, à vérifier]' if sexe not in ('M', 'F')
-                                 else f" [{'femme' if sexe == 'F' else 'homme'}, déduit du prénom : à vérifier]" if r.get('SEXE_DEDUIT') else '')
+                                 else f" [{'femme' if sexe == 'F' else 'homme'}, déduit du prénom{' via API genderize.io' if r.get('SEXE_DEDUIT') == 'api' else ''} : à vérifier]" if r.get('SEXE_DEDUIT') else '')
                     api_n, inconnus = v.get('_genre_jury', ('', ''))
                     if doc == 'diplome':
                         note_sexe += (f" [genre du jury : {api_n}, à vérifier]" if api_n else '') + \
